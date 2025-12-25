@@ -1,222 +1,196 @@
-import cv2
-import tempfile
-import os
-import re
 import gradio as gr
 import numpy as np
-from PIL import Image
+import cv2
+import tempfile
+from PIL import Image, ImageDraw
 
 # ===============================
 # CONSTANTS
 # ===============================
 WIDTH, HEIGHT = 128, 64
-ROW_BYTES = WIDTH // 8
-
-BASE_IDLE = ["center", "blink", "look_left", "look_right", "look_up"]
-BASE_EXPR = ["happy", "sad", "angry", "tired", "heart", "sleeping"]
+BG = 0
+FG = 255
 
 # ===============================
-# HELPERS
+# DRAWING
 # ===============================
-def sanitize(name: str) -> str:
-    name = name.lower().strip()
-    name = re.sub(r"[^a-z0-9_]", "_", name)
-    if name and name[0].isdigit():
-        name = "_" + name
-    return name
+def draw_eye_frame(p):
+    img = Image.new("L", (WIDTH, HEIGHT), BG)
+    d = ImageDraw.Draw(img)
 
-# ===============================
-# IMAGE → XBM
-# ===============================
-def to_bw(img, threshold=128):
-    img = img.resize((WIDTH, HEIGHT))
-    g = np.array(img.convert("L"))
-    bw = (g >= threshold).astype(np.uint8) * 255
-    return Image.fromarray(bw, mode="L").convert("1")
+    cx, cy = WIDTH // 2, HEIGHT // 2
+    ew = int(p["eye_width"] * 18)
+    eh = int(p["eye_height"] * 10)
+    spacing = int(p["eye_spacing"] * 20)
 
-def image_to_xbm(img):
-    data = []
-    for y in range(HEIGHT):
-        for xb in range(ROW_BYTES):
-            b = 0
-            for bit in range(8):
-                if img.getpixel((xb * 8 + bit, y)) == 255:
-                    b |= (1 << bit)
-            data.append(b)
-    return data
+    def draw_one(xc, tilt):
+        bbox = [xc - ew, cy - eh, xc + ew, cy + eh]
+        r = int(p["bevel"] * min(ew, eh))
 
-def format_bitmap(name, idx, data):
-    body = []
-    for i in range(0, len(data), 16):
-        body.append("  " + ", ".join(f"0x{b:02X}" for b in data[i:i+16]) + ",")
-    return f"""
-const unsigned char epd_{name}_{idx}[] PROGMEM = {{
-{chr(10).join(body)}
-}};
-"""
+        # Eye body (filled robotic eye)
+        if p["roundness"] > 0.95:
+            d.ellipse(bbox, fill=FG)
+        else:
+            d.rounded_rectangle(bbox, radius=r, fill=FG)
 
-def process_video(video_path, name):
-    cap = cv2.VideoCapture(video_path)
-    frames = []
-    idx = 0
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        bw = to_bw(img)
-        frames.append(format_bitmap(name, idx, image_to_xbm(bw)))
-        idx += 1
-    cap.release()
-    return frames, idx
+        # Upper lid
+        ul = int((1 - p["openness"] + p["upper_lid"]) * eh * 2)
+        if ul > 0:
+            d.rectangle([xc - ew, cy - eh, xc + ew, cy - eh + ul], fill=BG)
+
+        # Lower lid
+        ll = int(p["lower_lid"] * eh * 2)
+        if ll > 0:
+            d.rectangle([xc - ew, cy + eh - ll, xc + ew, cy + eh], fill=BG)
+
+        # Eyebrow
+        by = cy - eh - int(p["brow_height"] * 12)
+        d.line(
+            [xc - ew, by + tilt * 8, xc + ew, by - tilt * 8],
+            fill=FG,
+            width=2
+        )
+
+    draw_one(cx - spacing, p["tilt_left"])
+    draw_one(cx + spacing, p["tilt_right"])
+
+    return img
 
 # ===============================
-# ARDUINO GENERATOR
+# INTERPOLATION
 # ===============================
-def generate_code(intro_video, *all_inputs):
-    idle_count = len(BASE_IDLE)
-    expr_count = len(BASE_EXPR)
+def lerp(a, b, t):
+    return a + (b - a) * t
 
-    idle_videos = all_inputs[:idle_count]
-    expr_videos = all_inputs[idle_count:idle_count + expr_count]
-    extra_idle = all_inputs[idle_count + expr_count]
-    extra_expr = all_inputs[idle_count + expr_count + 1]
+def interpolate_params(a, b, t):
+    return {k: lerp(a[k], b[k], t) for k in a}
 
-    bitmaps = []
-    animations = []
-    idle_names = []
-    expr_names = []
+# ===============================
+# VIDEO GENERATION (EXACT TIMING + PINGPONG)
+# ===============================
+def generate_animation(start, end, duration_sec, fps, pingpong):
+    total_frames = max(2, int(duration_sec * fps))
 
-    # ---------- INTRO ----------
-    if intro_video:
-        frames, count = process_video(intro_video, "intro")
-        bitmaps += frames
-        animations.append(f"""
-const unsigned char* const ANIM_INTRO[] PROGMEM = {{
-{", ".join(f"epd_intro_{i}" for i in range(count))}
-}};
-Animation anim_intro = {{ ANIM_INTRO, {count}, MS_DELAY }};
-""")
+    tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
 
-    # ---------- BASE IDLE ----------
-    for name, video in zip(BASE_IDLE, idle_videos):
-        if video:
-            frames, count = process_video(video, name)
-            bitmaps += frames
-            idle_names.append(name)
-            animations.append(f"""
-const unsigned char* const ANIM_{name.upper()}[] PROGMEM = {{
-{", ".join(f"epd_{name}_{i}" for i in range(count))}
-}};
-Animation anim_{name} = {{ ANIM_{name.upper()}, {count}, MS_DELAY }};
-""")
+    writer = cv2.VideoWriter(
+        tmp.name,
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps,
+        (WIDTH, HEIGHT),
+        True
+    )
 
-    # ---------- BASE EXPRESSIONS ----------
-    for name, video in zip(BASE_EXPR, expr_videos):
-        if video:
-            frames, count = process_video(video, name)
-            bitmaps += frames
-            expr_names.append(name)
-            animations.append(f"""
-const unsigned char* const ANIM_{name.upper()}[] PROGMEM = {{
-{", ".join(f"epd_{name}_{i}" for i in range(count))}
-}};
-Animation anim_{name} = {{ ANIM_{name.upper()}, {count}, MS_DELAY }};
-""")
+    for i in range(total_frames):
+        t = i / (total_frames - 1)
 
-    # ---------- EXTRA IDLE ----------
-    for name, video in extra_idle:
-        if name and video:
-            name = sanitize(name)
-            frames, count = process_video(video, name)
-            bitmaps += frames
-            idle_names.append(name)
-            animations.append(f"""
-const unsigned char* const ANIM_{name.upper()}[] PROGMEM = {{
-{", ".join(f"epd_{name}_{i}" for i in range(count))}
-}};
-Animation anim_{name} = {{ ANIM_{name.upper()}, {count}, MS_DELAY }};
-""")
+        if pingpong:
+            if t <= 0.5:
+                tt = t * 2
+            else:
+                tt = 2 - t * 2
+        else:
+            tt = t
 
-    # ---------- EXTRA EXPRESSIONS ----------
-    for name, video in extra_expr:
-        if name and video:
-            name = sanitize(name)
-            frames, count = process_video(video, name)
-            bitmaps += frames
-            expr_names.append(name)
-            animations.append(f"""
-const unsigned char* const ANIM_{name.upper()}[] PROGMEM = {{
-{", ".join(f"epd_{name}_{i}" for i in range(count))}
-}};
-Animation anim_{name} = {{ ANIM_{name.upper()}, {count}, MS_DELAY }};
-""")
+        p = interpolate_params(start, end, tt)
+        frame = draw_eye_frame(p).convert("RGB")
+        writer.write(np.array(frame))
 
-    ino = f"""
-#include <Arduino.h>
-#include <U8g2lib.h>
-#include <Wire.h>
+    writer.release()
+    return tmp.name
 
-#define BTN_D1 D1
-#define MS_DELAY 10
+# ===============================
+# GRADIO CALLBACK
+# ===============================
+def build_all(duration, fps, pingpong, *vals):
+    keys = [
+        "openness", "upper_lid", "lower_lid",
+        "gaze_x", "gaze_y",
+        "tilt_left", "tilt_right",
+        "brow_height",
+        "roundness", "bevel",
+        "eye_spacing", "eye_width", "eye_height"
+    ]
 
-struct Animation {{
-  const unsigned char* const* frames;
-  uint8_t count;
-  uint16_t delayMs;
-}};
+    mid = len(keys)
+    start = dict(zip(keys, vals[:mid]))
+    end = dict(zip(keys, vals[mid:]))
 
-{''.join(bitmaps)}
+    start_img = draw_eye_frame(start)
+    end_img = draw_eye_frame(end)
 
-{''.join(animations)}
-"""
+    video = generate_animation(
+        start=start,
+        end=end,
+        duration_sec=duration,
+        fps=fps,
+        pingpong=pingpong
+    )
 
-    path = os.path.join(tempfile.gettempdir(), "face.ino")
-    with open(path, "w") as f:
-        f.write(ino)
+    return start_img, end_img, video
 
-    return path
+# COPY END → START
+def copy_end_to_start(*end_vals):
+    return list(end_vals)
 
 # ===============================
 # UI
 # ===============================
-with gr.Blocks(title="Face → Arduino Generator") as demo:
-    gr.Markdown("## 🚀 Power-on Intro")
-    intro = gr.Video(label="Intro (optional)")
+with gr.Blocks(title="🧠 Eye Transition Designer") as demo:
+    gr.Markdown("## 👁️ Eye Transition Animator")
 
-    gr.Markdown("## 💤 Idle (baseline)")
-    idle_inputs = [gr.Video(label=n.replace("_", " ").title()) for n in BASE_IDLE]
+    with gr.Row():
+        duration = gr.Slider(0.5, 10, 2.0, step=0.1, label="Duration (seconds)")
+        fps = gr.Slider(12, 60, 24, step=1, label="FPS")
 
-    gr.Markdown("## 🎭 Expressions (baseline)")
-    expr_inputs = [gr.Video(label=n.replace("_", " ").title()) for n in BASE_EXPR]
-
-    gr.Markdown("## ➕ Extra Idle (optional)")
-    extra_idle = gr.State([])
-    idle_name = gr.Textbox(label="Idle name")
-    idle_video = gr.Video(label="Idle video")
-    gr.Button("Add Idle").click(
-        lambda n, v, s: s + [(n, v)],
-        [idle_name, idle_video, extra_idle],
-        extra_idle,
+    pingpong = gr.Checkbox(
+        label="🔁 Ping-Pong (Start → End → Start)",
+        value=False
     )
 
-    gr.Markdown("## ➕ Extra Expressions (optional)")
-    extra_expr = gr.State([])
-    expr_name = gr.Textbox(label="Expression name")
-    expr_video = gr.Video(label="Expression video")
-    gr.Button("Add Expression").click(
-        lambda n, v, s: s + [(n, v)],
-        [expr_name, expr_video, extra_expr],
-        extra_expr,
+    def controls(title):
+        with gr.Column():
+            gr.Markdown(f"### {title}")
+            return [
+                gr.Slider(0, 1, 0.8, label="Openness"),
+                gr.Slider(0, 1, 0.0, label="Upper Lid"),
+                gr.Slider(0, 1, 0.0, label="Lower Lid"),
+                gr.Slider(-1, 1, 0.0, label="Gaze X"),
+                gr.Slider(-1, 1, 0.0, label="Gaze Y"),
+                gr.Slider(-1, 1, 0.0, label="Tilt Left"),
+                gr.Slider(-1, 1, 0.0, label="Tilt Right"),
+                gr.Slider(0, 1, 0.4, label="Brow Height"),
+                gr.Slider(0, 1, 0.3, label="Roundness"),
+                gr.Slider(0, 1, 0.25, label="Bevel"),
+                gr.Slider(0.6, 1.4, 1.0, label="Eye Spacing"),
+                gr.Slider(0.6, 1.4, 1.0, label="Eye Width"),
+                gr.Slider(0.6, 1.4, 1.0, label="Eye Height"),
+            ]
+
+    with gr.Row():
+        start_controls = controls("START (Current Pose)")
+        end_controls = controls("END (Target Pose)")
+
+    with gr.Row():
+        copy_btn = gr.Button("⬅️ Use END as START")
+        gen_btn = gr.Button("🎬 Generate Animation")
+
+    with gr.Row():
+        start_preview = gr.Image(label="Start Frame", image_mode="L")
+        end_preview = gr.Image(label="End Frame", image_mode="L")
+
+    video = gr.Video(label="Generated Animation")
+
+    copy_btn.click(
+        copy_end_to_start,
+        inputs=end_controls,
+        outputs=start_controls
     )
 
-    out = gr.File(label="Download face.ino")
-
-    gr.Button("Generate Arduino").click(
-        generate_code,
-        [intro] + idle_inputs + expr_inputs + [extra_idle, extra_expr],
-        out,
+    gen_btn.click(
+        build_all,
+        inputs=[duration, fps, pingpong] + start_controls + end_controls,
+        outputs=[start_preview, end_preview, video]
     )
 
 demo.launch()
-
