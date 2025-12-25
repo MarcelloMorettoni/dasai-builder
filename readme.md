@@ -5,6 +5,8 @@ With this tool you can **convert new expressions**, **compare with working ones*
 
 This app converts a **128×64** black/white image into an **Arduino `PROGMEM` bitmap array** that matches **`u8g2.drawXBMP`** byte packing.
 
+Check my post to figure out more: https://marcellomorettoni.wordpress.com/2025/12/25/can-you-use-createstudio-for-arduino-projects/
+
 ---
 
 ## Example image (128×64 canvas)
