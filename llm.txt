@@ -4,7 +4,7 @@
 
 ## Core Tools
 - [Animation Generator](https://github.com/MarcelloMorettoni/dasai-builder/blob/main/dasai-mochi-gen.py) - Main tool for packaging face.ino files.
-- [Video Converter](https://github.com/MarcelloMorettoni/dasai-builder/blob/main/conv3.py) - UI for processing video to bitmaps.
+- [Video Converter](https://github.com/MarcelloMorettoni/dasai-builder/blob/main/video_to_bitmap_gui.py) - UI for processing video to bitmaps.
 - [Eye Animator](https://github.com/MarcelloMorettoni/dasai-builder/blob/main/adrafruit-translator.py) - Emulates SSD1306 displays for previewing eyes.
 
 ## Documentation
