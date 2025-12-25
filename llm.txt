@@ -1,0 +1,11 @@
+# DASAI Mochi Builder
+
+> Tools to convert images/video into C arrays for Arduino OLED displays (u8g2).
+
+## Core Tools
+- [Animation Generator](https://github.com/MarcelloMorettoni/dasai-builder/blob/main/dasai-mochi-gen.py) - Main tool for packaging face.ino files.
+- [Video Converter](https://github.com/MarcelloMorettoni/dasai-builder/blob/main/conv3.py) - UI for processing video to bitmaps.
+- [Eye Animator](https://github.com/MarcelloMorettoni/dasai-builder/blob/main/adrafruit-translator.py) - Emulates SSD1306 displays for previewing eyes.
+
+## Documentation
+- [Readme & Usage](https://github.com/MarcelloMorettoni/dasai-builder/blob/main/readme.md)
