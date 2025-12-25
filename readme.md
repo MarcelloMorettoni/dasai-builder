@@ -17,6 +17,7 @@ Check my post to figure out more: https://marcellomorettoni.wordpress.com/2025/1
 | `conv3.py` | Full-featured Gradio app with tabs for single frames **and** whole-video imports. Includes threshold and inversion controls, packing/preview options (so you can pick whether white or black is “on”), hex snippets, bit statistics, and a C-array renderer for pasted code. The “Video to Animation” tab exports every frame as PNG plus a `.c` file with all arrays. |
 | `dasay-mochi-gen.py` | THIS IS THE MOST IMPORTANT ONE - Animation packager for Arduino. Upload intro, idle, and expression videos (or add your own named extras) and it emits a `face.ino` file containing bitmap arrays and animation tables. BUILT FOR XIAO RP2040 |
 | `adrafruit-translator.py` | SSD1306 “emulator” that draws/animates eyes (blink, happy, sad, angry, tired, heart, gaze shifts, sleeping) and exports them as an MP4. Lets you preview motion without flashing a board. |
+| `eye-generator.py` | Eye transition animator. Lets you design a start pose and an end pose (openness, lids, brow, tilt, gaze, spacing, roundness) and exports the interpolated MP4 so you can preview a custom eye movement before baking it into your Arduino assets. |
 | `sad.png` | Example 128×64 expression you can load into the converters to verify alignment and contrast. |
 
 ---
@@ -76,6 +77,11 @@ Then launch one of the tools:
 - SSD1306 → MP4 eye animator:  
   ```bash
   python adrafruit-translator.py
+  ```
+
+- Eye transition animator (start/end pose to MP4):  
+  ```bash
+  python eye-generator.py
   ```
 
 If you run into port conflicts, add `--server.port 7861` (or any free port) to the `python ...` command.
