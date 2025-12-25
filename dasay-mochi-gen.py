@@ -23,22 +23,22 @@ def draw_eye_frame(p):
     eh = int(p["eye_height"] * 10)
     spacing = int(p["eye_spacing"] * 20)
 
-    def draw_one(xc, tilt):
+    def draw_one(xc, tilt, openness):
         bbox = [xc - ew, cy - eh, xc + ew, cy + eh]
         r = int(p["bevel"] * min(ew, eh))
 
-        # Eye body (filled robotic eye)
+        # Eye body
         if p["roundness"] > 0.95:
             d.ellipse(bbox, fill=FG)
         else:
             d.rounded_rectangle(bbox, radius=r, fill=FG)
 
-        # Upper lid
-        ul = int((1 - p["openness"] + p["upper_lid"]) * eh * 2)
+        # Upper lid (per-eye)
+        ul = int((1 - openness + p["upper_lid"]) * eh * 2)
         if ul > 0:
             d.rectangle([xc - ew, cy - eh, xc + ew, cy - eh + ul], fill=BG)
 
-        # Lower lid
+        # Lower lid (shared)
         ll = int(p["lower_lid"] * eh * 2)
         if ll > 0:
             d.rectangle([xc - ew, cy + eh - ll, xc + ew, cy + eh], fill=BG)
@@ -51,8 +51,8 @@ def draw_eye_frame(p):
             width=2
         )
 
-    draw_one(cx - spacing, p["tilt_left"])
-    draw_one(cx + spacing, p["tilt_right"])
+    draw_one(cx - spacing, p["tilt_left"],  p["openness_left"])
+    draw_one(cx + spacing, p["tilt_right"], p["openness_right"])
 
     return img
 
@@ -66,7 +66,7 @@ def interpolate_params(a, b, t):
     return {k: lerp(a[k], b[k], t) for k in a}
 
 # ===============================
-# VIDEO GENERATION (EXACT TIMING + PINGPONG)
+# VIDEO GENERATION
 # ===============================
 def generate_animation(start, end, duration_sec, fps, pingpong):
     total_frames = max(2, int(duration_sec * fps))
@@ -85,10 +85,7 @@ def generate_animation(start, end, duration_sec, fps, pingpong):
         t = i / (total_frames - 1)
 
         if pingpong:
-            if t <= 0.5:
-                tt = t * 2
-            else:
-                tt = 2 - t * 2
+            tt = t * 2 if t <= 0.5 else 2 - t * 2
         else:
             tt = t
 
@@ -100,11 +97,12 @@ def generate_animation(start, end, duration_sec, fps, pingpong):
     return tmp.name
 
 # ===============================
-# GRADIO CALLBACK
+# CALLBACK
 # ===============================
 def build_all(duration, fps, pingpong, *vals):
     keys = [
-        "openness", "upper_lid", "lower_lid",
+        "openness_left", "openness_right",
+        "upper_lid", "lower_lid",
         "gaze_x", "gaze_y",
         "tilt_left", "tilt_right",
         "brow_height",
@@ -114,10 +112,10 @@ def build_all(duration, fps, pingpong, *vals):
 
     mid = len(keys)
     start = dict(zip(keys, vals[:mid]))
-    end = dict(zip(keys, vals[mid:]))
+    end   = dict(zip(keys, vals[mid:]))
 
     start_img = draw_eye_frame(start)
-    end_img = draw_eye_frame(end)
+    end_img   = draw_eye_frame(end)
 
     video = generate_animation(
         start=start,
@@ -137,7 +135,7 @@ def copy_end_to_start(*end_vals):
 # UI
 # ===============================
 with gr.Blocks(title="🧠 Eye Transition Designer") as demo:
-    gr.Markdown("## 👁️ Eye Transition Animator")
+    gr.Markdown("## 👁️ Asymmetric Eye Transition Animator")
 
     with gr.Row():
         duration = gr.Slider(0.5, 10, 2.0, step=0.1, label="Duration (seconds)")
@@ -152,7 +150,8 @@ with gr.Blocks(title="🧠 Eye Transition Designer") as demo:
         with gr.Column():
             gr.Markdown(f"### {title}")
             return [
-                gr.Slider(0, 1, 0.8, label="Openness"),
+                gr.Slider(0, 1, 0.8, label="Openness LEFT"),
+                gr.Slider(0, 1, 0.8, label="Openness RIGHT"),
                 gr.Slider(0, 1, 0.0, label="Upper Lid"),
                 gr.Slider(0, 1, 0.0, label="Lower Lid"),
                 gr.Slider(-1, 1, 0.0, label="Gaze X"),
@@ -169,15 +168,15 @@ with gr.Blocks(title="🧠 Eye Transition Designer") as demo:
 
     with gr.Row():
         start_controls = controls("START (Current Pose)")
-        end_controls = controls("END (Target Pose)")
+        end_controls   = controls("END (Target Pose)")
 
     with gr.Row():
         copy_btn = gr.Button("⬅️ Use END as START")
-        gen_btn = gr.Button("🎬 Generate Animation")
+        gen_btn  = gr.Button("🎬 Generate Animation")
 
     with gr.Row():
         start_preview = gr.Image(label="Start Frame", image_mode="L")
-        end_preview = gr.Image(label="End Frame", image_mode="L")
+        end_preview   = gr.Image(label="End Frame", image_mode="L")
 
     video = gr.Video(label="Generated Animation")
 
@@ -194,3 +193,4 @@ with gr.Blocks(title="🧠 Eye Transition Designer") as demo:
     )
 
 demo.launch()
+
