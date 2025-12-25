@@ -40,5 +40,5 @@ White pixels are treated as **ON**, black pixels as **OFF**.
 Install them with:
 
 ```bash
-pip install gradio numpy pillow
+pip install gradio numpy pillow opencv-python
 ```
